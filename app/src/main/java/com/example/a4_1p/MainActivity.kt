@@ -1,6 +1,5 @@
 package com.example.a4_1p
 
-import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,7 +26,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,14 +36,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.a4_1p.data.EventDatabase
+import com.example.a4_1p.data.EventEntity
 import com.example.a4_1p.ui.theme._41PTheme
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 
@@ -56,6 +54,24 @@ data class PlannerEvent(
     val date: String,
     val location: String,
     val notes: String,
+)
+
+private fun EventEntity.toPlannerEvent(): PlannerEvent = PlannerEvent(
+    id = id,
+    title = title,
+    category = category,
+    date = date,
+    location = location,
+    notes = notes,
+)
+
+private fun PlannerEvent.toEventEntity(): EventEntity = EventEntity(
+    id,
+    title,
+    category,
+    date,
+    location,
+    notes,
 )
 
 private enum class PlannerDestination(val route: String, val label: String, val iconText: String) {
@@ -78,7 +94,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun EventPlannerApp() {
     val context = LocalContext.current
-    val eventStorage = remember { EventStorage(context) }
+    val eventDao = remember(context) { EventDatabase.getInstance(context).eventDao() }
     val events = remember { mutableStateListOf<PlannerEvent>() }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -88,7 +104,6 @@ fun EventPlannerApp() {
     var date by remember { mutableStateOf("") }
     var location by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
-    var nextId by remember { mutableIntStateOf(1) }
     var editingEventId by remember { mutableStateOf<Int?>(null) }
 
     fun clearForm() {
@@ -148,7 +163,7 @@ fun EventPlannerApp() {
         }
 
         val event = PlannerEvent(
-            id = editingEventId ?: nextId,
+            id = editingEventId ?: 0,
             title = title.trim(),
             category = category.trim(),
             date = date.trim(),
@@ -156,25 +171,23 @@ fun EventPlannerApp() {
             notes = notes.trim(),
         )
 
-        if (editingEventId == null) {
-            nextId += 1
-            events.add(event)
-        } else {
-            val index = events.indexOfFirst { it.id == editingEventId }
-            if (index != -1) {
-                events[index] = event
+        scope.launch {
+            if (editingEventId == null) {
+                eventDao.insert(event.toEventEntity())
+            } else {
+                eventDao.update(event.toEventEntity())
             }
+            val loadedEvents = eventDao.getAll().map { it.toPlannerEvent() }
+            events.clear()
+            events.addAll(loadedEvents)
+            clearForm()
         }
-
-        eventStorage.saveEvents(events)
-        clearForm()
         return true
     }
 
     LaunchedEffect(Unit) {
-        val loadedEvents = eventStorage.loadEvents()
+        val loadedEvents = eventDao.getAll().map { it.toPlannerEvent() }
         events.addAll(loadedEvents)
-        nextId = (loadedEvents.maxOfOrNull { it.id } ?: 0) + 1
     }
 
     val navController = rememberNavController()
@@ -220,12 +233,14 @@ fun EventPlannerApp() {
                         navController.navigate(PlannerDestination.AddEvent.route)
                     },
                     onDelete = { event ->
-                        events.remove(event)
-                        eventStorage.saveEvents(events)
-                        if (editingEventId == event.id) {
-                            clearForm()
+                        scope.launch {
+                            eventDao.delete(event.toEventEntity())
+                            events.remove(event)
+                            if (editingEventId == event.id) {
+                                clearForm()
+                            }
+                            showMessage("Event deleted successfully.")
                         }
-                        showMessage("Event deleted successfully.")
                     },
                 )
             }
@@ -405,52 +420,6 @@ private fun EventCard(event: PlannerEvent, onEdit: () -> Unit, onDelete: () -> U
                 }
             }
         }
-    }
-}
-
-class EventStorage(context: Context) {
-    private val preferences = context.getSharedPreferences("planner_storage", Context.MODE_PRIVATE)
-
-    fun loadEvents(): List<PlannerEvent> {
-        val raw = preferences.getString(KEY_EVENTS, null) ?: return emptyList()
-        if (raw.isBlank()) return emptyList()
-
-        val array = JSONArray(raw)
-        return buildList {
-            for (i in 0 until array.length()) {
-                val obj = array.optJSONObject(i) ?: continue
-                add(
-                    PlannerEvent(
-                        id = obj.optInt("id", i + 1),
-                        title = obj.optString("title"),
-                        category = obj.optString("category"),
-                        date = obj.optString("date"),
-                        location = obj.optString("location"),
-                        notes = obj.optString("notes"),
-                    ),
-                )
-            }
-        }
-    }
-
-    fun saveEvents(events: List<PlannerEvent>) {
-        val array = JSONArray()
-        events.forEach { event ->
-            array.put(
-                JSONObject()
-                    .put("id", event.id)
-                    .put("title", event.title)
-                    .put("category", event.category)
-                    .put("date", event.date)
-                    .put("location", event.location)
-                    .put("notes", event.notes),
-            )
-        }
-        preferences.edit().putString(KEY_EVENTS, array.toString()).apply()
-    }
-
-    companion object {
-        private const val KEY_EVENTS = "events"
     }
 }
 
