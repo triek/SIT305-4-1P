@@ -8,10 +8,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +17,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -35,6 +35,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import com.example.a4_1p.ui.theme._41PTheme
 import org.json.JSONArray
 import org.json.JSONObject
@@ -48,23 +52,25 @@ data class PlannerEvent(
     val notes: String,
 )
 
+private enum class PlannerDestination(val route: String, val label: String, val iconText: String) {
+    EventList("event_list", "Event List", "L"),
+    AddEvent("add_event", "Add Event", "A"),
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             _41PTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    EventPlannerScreen(modifier = Modifier.padding(innerPadding))
-                }
+                EventPlannerApp()
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EventPlannerScreen(modifier: Modifier = Modifier) {
+fun EventPlannerApp() {
     val context = LocalContext.current
     val eventStorage = remember { EventStorage(context) }
     val events = remember { mutableStateListOf<PlannerEvent>() }
@@ -86,14 +92,180 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
         editingEventId = null
     }
 
+    fun editEvent(event: PlannerEvent) {
+        editingEventId = event.id
+        title = event.title
+        category = event.category
+        date = event.date
+        location = event.location
+        notes = event.notes
+    }
+
+    fun saveEvent() {
+        if (title.isBlank() || category.isBlank() || date.isBlank() || location.isBlank()) return
+
+        val event = PlannerEvent(
+            id = editingEventId ?: nextId,
+            title = title.trim(),
+            category = category.trim(),
+            date = date.trim(),
+            location = location.trim(),
+            notes = notes.trim(),
+        )
+
+        if (editingEventId == null) {
+            nextId += 1
+            events.add(event)
+        } else {
+            val index = events.indexOfFirst { it.id == editingEventId }
+            if (index != -1) {
+                events[index] = event
+            }
+        }
+
+        eventStorage.saveEvents(events)
+        clearForm()
+    }
+
     LaunchedEffect(Unit) {
         val loadedEvents = eventStorage.loadEvents()
         events.addAll(loadedEvents)
         nextId = (loadedEvents.maxOfOrNull { it.id } ?: 0) + 1
     }
 
+    val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route ?: PlannerDestination.EventList.route
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            NavigationBar {
+                PlannerDestination.entries.forEach { destination ->
+                    NavigationBarItem(
+                        selected = currentRoute == destination.route,
+                        onClick = {
+                            navController.navigate(destination.route) {
+                                launchSingleTop = true
+                                restoreState = true
+                                popUpTo(navController.graph.startDestinationId) {
+                                    saveState = true
+                                }
+                            }
+                        },
+                        icon = { Text(destination.iconText) },
+                        label = { Text(destination.label) },
+                    )
+                }
+            }
+        },
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = PlannerDestination.EventList.route,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            composable(PlannerDestination.EventList.route) {
+                EventListScreen(
+                    events = events,
+                    onEdit = { event ->
+                        editEvent(event)
+                        navController.navigate(PlannerDestination.AddEvent.route)
+                    },
+                    onDelete = { event ->
+                        events.remove(event)
+                        eventStorage.saveEvents(events)
+                        if (editingEventId == event.id) {
+                            clearForm()
+                        }
+                    },
+                )
+            }
+            composable(PlannerDestination.AddEvent.route) {
+                AddEventScreen(
+                    title = title,
+                    category = category,
+                    date = date,
+                    location = location,
+                    notes = notes,
+                    editingEventId = editingEventId,
+                    onTitleChange = { title = it },
+                    onCategoryChange = { category = it },
+                    onDateChange = { date = it },
+                    onLocationChange = { location = it },
+                    onNotesChange = { notes = it },
+                    onSave = {
+                        saveEvent()
+                        navController.navigate(PlannerDestination.EventList.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onCancelEdit = {
+                        clearForm()
+                        navController.navigate(PlannerDestination.EventList.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventListScreen(
+    events: List<PlannerEvent>,
+    onEdit: (PlannerEvent) -> Unit,
+    onDelete: (PlannerEvent) -> Unit,
+) {
     Column(
-        modifier = modifier
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "Upcoming schedule",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+
+        if (events.isEmpty()) {
+            Text(
+                text = "No events yet. Use Add Event to create one.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(events, key = { it.id }) { event ->
+                    EventCard(event = event, onEdit = { onEdit(event) }, onDelete = { onDelete(event) })
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddEventScreen(
+    title: String,
+    category: String,
+    date: String,
+    location: String,
+    notes: String,
+    editingEventId: Int?,
+    onTitleChange: (String) -> Unit,
+    onCategoryChange: (String) -> Unit,
+    onDateChange: (String) -> Unit,
+    onLocationChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancelEdit: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -106,7 +278,7 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 
         OutlinedTextField(
             value = title,
-            onValueChange = { title = it },
+            onValueChange = onTitleChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Event title") },
             singleLine = true,
@@ -114,7 +286,7 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 
         OutlinedTextField(
             value = category,
-            onValueChange = { category = it },
+            onValueChange = onCategoryChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Category") },
             singleLine = true,
@@ -122,7 +294,7 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 
         OutlinedTextField(
             value = date,
-            onValueChange = { date = it },
+            onValueChange = onDateChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Date & time") },
             placeholder = { Text("e.g. 2026-05-03 14:00") },
@@ -131,7 +303,7 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 
         OutlinedTextField(
             value = location,
-            onValueChange = { location = it },
+            onValueChange = onLocationChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Location") },
             singleLine = true,
@@ -139,7 +311,7 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 
         OutlinedTextField(
             value = notes,
-            onValueChange = { notes = it },
+            onValueChange = onNotesChange,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Notes") },
             minLines = 2,
@@ -149,77 +321,14 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(
-                onClick = {
-                    if (title.isBlank() || category.isBlank() || date.isBlank() || location.isBlank()) {
-                        return@Button
-                    }
-
-                    val event = PlannerEvent(
-                        id = editingEventId ?: nextId,
-                        title = title.trim(),
-                        category = category.trim(),
-                        date = date.trim(),
-                        location = location.trim(),
-                        notes = notes.trim(),
-                    )
-
-                    if (editingEventId == null) {
-                        nextId += 1
-                        events.add(event)
-                    } else {
-                        val index = events.indexOfFirst { it.id == editingEventId }
-                        if (index != -1) {
-                            events[index] = event
-                        }
-                    }
-
-                    eventStorage.saveEvents(events)
-                    clearForm()
-                },
-                modifier = Modifier.weight(1f),
-            ) {
+            Button(onClick = onSave, modifier = Modifier.weight(1f)) {
                 Text(if (editingEventId == null) "Add event" else "Update event")
             }
 
             if (editingEventId != null) {
-                Button(
-                    onClick = { clearForm() },
-                    modifier = Modifier.weight(1f),
-                ) {
+                Button(onClick = onCancelEdit, modifier = Modifier.weight(1f)) {
                     Text("Cancel")
                 }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = "Upcoming schedule",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(events, key = { it.id }) { event ->
-                EventCard(
-                    event = event,
-                    onEdit = {
-                        editingEventId = event.id
-                        title = event.title
-                        category = event.category
-                        date = event.date
-                        location = event.location
-                        notes = event.notes
-                    },
-                    onDelete = {
-                        events.remove(event)
-                        eventStorage.saveEvents(events)
-                        if (editingEventId == event.id) {
-                            clearForm()
-                        }
-                    },
-                )
             }
         }
     }
@@ -301,6 +410,6 @@ class EventStorage(context: Context) {
 @Composable
 fun EventPlannerPreview() {
     _41PTheme {
-        EventPlannerScreen()
+        EventPlannerApp()
     }
 }
