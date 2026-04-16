@@ -43,7 +43,9 @@ import androidx.navigation.compose.rememberNavController
 import com.example.a4_1p.data.EventDatabase
 import com.example.a4_1p.data.EventEntity
 import com.example.a4_1p.ui.theme._41PTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
 
@@ -130,6 +132,14 @@ fun EventPlannerApp() {
         }
     }
 
+    suspend fun loadEventsFromDb() {
+        val loadedEvents = withContext(Dispatchers.IO) {
+            eventDao.getAll().map { it.toPlannerEvent() }
+        }
+        events.clear()
+        events.addAll(loadedEvents)
+    }
+
     fun parseDateInput(rawDate: String): LocalDate? {
         val datePart = rawDate.trim().split(" ").firstOrNull().orEmpty()
         return try {
@@ -173,21 +183,22 @@ fun EventPlannerApp() {
 
         scope.launch {
             if (editingEventId == null) {
-                eventDao.insert(event.toEventEntity())
+                withContext(Dispatchers.IO) {
+                    eventDao.insert(event.toEventEntity())
+                }
             } else {
-                eventDao.update(event.toEventEntity())
+                withContext(Dispatchers.IO) {
+                    eventDao.update(event.toEventEntity())
+                }
             }
-            val loadedEvents = eventDao.getAll().map { it.toPlannerEvent() }
-            events.clear()
-            events.addAll(loadedEvents)
+            loadEventsFromDb()
             clearForm()
         }
         return true
     }
 
     LaunchedEffect(Unit) {
-        val loadedEvents = eventDao.getAll().map { it.toPlannerEvent() }
-        events.addAll(loadedEvents)
+        loadEventsFromDb()
     }
 
     val navController = rememberNavController()
@@ -234,7 +245,9 @@ fun EventPlannerApp() {
                     },
                     onDelete = { event ->
                         scope.launch {
-                            eventDao.delete(event.toEventEntity())
+                            withContext(Dispatchers.IO) {
+                                eventDao.delete(event.toEventEntity())
+                            }
                             events.remove(event)
                             if (editingEventId == event.id) {
                                 clearForm()
