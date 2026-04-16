@@ -42,6 +42,7 @@ import org.json.JSONObject
 data class PlannerEvent(
     val id: Int,
     val title: String,
+    val category: String,
     val date: String,
     val location: String,
     val notes: String,
@@ -69,10 +70,21 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
     val events = remember { mutableStateListOf<PlannerEvent>() }
 
     var title by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("") }
     var date by remember { mutableStateOf("") }
     var location by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var nextId by remember { mutableIntStateOf(1) }
+    var editingEventId by remember { mutableStateOf<Int?>(null) }
+
+    fun clearForm() {
+        title = ""
+        category = ""
+        date = ""
+        location = ""
+        notes = ""
+        editingEventId = null
+    }
 
     LaunchedEffect(Unit) {
         val loadedEvents = eventStorage.loadEvents()
@@ -101,6 +113,14 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
         )
 
         OutlinedTextField(
+            value = category,
+            onValueChange = { category = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Category") },
+            singleLine = true,
+        )
+
+        OutlinedTextField(
             value = date,
             onValueChange = { date = it },
             modifier = Modifier.fillMaxWidth(),
@@ -125,29 +145,51 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
             minLines = 2,
         )
 
-        Button(
-            onClick = {
-                if (title.isBlank() || date.isBlank()) return@Button
-
-                val event = PlannerEvent(
-                    id = nextId,
-                    title = title.trim(),
-                    date = date.trim(),
-                    location = location.trim(),
-                    notes = notes.trim(),
-                )
-                nextId += 1
-                events.add(event)
-                eventStorage.saveEvents(events)
-
-                title = ""
-                date = ""
-                location = ""
-                notes = ""
-            },
+        Row(
             modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Add event")
+            Button(
+                onClick = {
+                    if (title.isBlank() || category.isBlank() || date.isBlank() || location.isBlank()) {
+                        return@Button
+                    }
+
+                    val event = PlannerEvent(
+                        id = editingEventId ?: nextId,
+                        title = title.trim(),
+                        category = category.trim(),
+                        date = date.trim(),
+                        location = location.trim(),
+                        notes = notes.trim(),
+                    )
+
+                    if (editingEventId == null) {
+                        nextId += 1
+                        events.add(event)
+                    } else {
+                        val index = events.indexOfFirst { it.id == editingEventId }
+                        if (index != -1) {
+                            events[index] = event
+                        }
+                    }
+
+                    eventStorage.saveEvents(events)
+                    clearForm()
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (editingEventId == null) "Add event" else "Update event")
+            }
+
+            if (editingEventId != null) {
+                Button(
+                    onClick = { clearForm() },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cancel")
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
@@ -162,9 +204,20 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
             items(events, key = { it.id }) { event ->
                 EventCard(
                     event = event,
+                    onEdit = {
+                        editingEventId = event.id
+                        title = event.title
+                        category = event.category
+                        date = event.date
+                        location = event.location
+                        notes = event.notes
+                    },
                     onDelete = {
                         events.remove(event)
                         eventStorage.saveEvents(events)
+                        if (editingEventId == event.id) {
+                            clearForm()
+                        }
                     },
                 )
             }
@@ -173,18 +226,23 @@ fun EventPlannerScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun EventCard(event: PlannerEvent, onDelete: () -> Unit) {
+private fun EventCard(event: PlannerEvent, onEdit: () -> Unit, onDelete: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(text = event.title, style = MaterialTheme.typography.titleMedium)
+            Text(text = "Category: ${event.category}", style = MaterialTheme.typography.bodyMedium)
             Text(text = "Date: ${event.date}", style = MaterialTheme.typography.bodyMedium)
-            if (event.location.isNotBlank()) {
-                Text(text = "Location: ${event.location}", style = MaterialTheme.typography.bodyMedium)
-            }
+            Text(text = "Location: ${event.location}", style = MaterialTheme.typography.bodyMedium)
             if (event.notes.isNotBlank()) {
                 Text(text = "Notes: ${event.notes}", style = MaterialTheme.typography.bodySmall)
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, androidx.compose.ui.Alignment.End),
+            ) {
+                Button(onClick = onEdit) {
+                    Text("Edit")
+                }
                 Button(onClick = onDelete) {
                     Text("Delete")
                 }
@@ -208,6 +266,7 @@ class EventStorage(context: Context) {
                     PlannerEvent(
                         id = obj.optInt("id", i + 1),
                         title = obj.optString("title"),
+                        category = obj.optString("category"),
                         date = obj.optString("date"),
                         location = obj.optString("location"),
                         notes = obj.optString("notes"),
@@ -224,6 +283,7 @@ class EventStorage(context: Context) {
                 JSONObject()
                     .put("id", event.id)
                     .put("title", event.title)
+                    .put("category", event.category)
                     .put("date", event.date)
                     .put("location", event.location)
                     .put("notes", event.notes),
