@@ -21,6 +21,8 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,12 +31,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -42,6 +46,8 @@ import androidx.navigation.compose.rememberNavController
 import com.example.a4_1p.ui.theme._41PTheme
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
+import java.time.format.DateTimeParseException
 
 data class PlannerEvent(
     val id: Int,
@@ -74,6 +80,8 @@ fun EventPlannerApp() {
     val context = LocalContext.current
     val eventStorage = remember { EventStorage(context) }
     val events = remember { mutableStateListOf<PlannerEvent>() }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     var title by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("") }
@@ -101,8 +109,43 @@ fun EventPlannerApp() {
         notes = event.notes
     }
 
-    fun saveEvent() {
-        if (title.isBlank() || category.isBlank() || date.isBlank() || location.isBlank()) return
+    fun showMessage(message: String) {
+        scope.launch {
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    fun parseDateInput(rawDate: String): LocalDate? {
+        val datePart = rawDate.trim().split(" ").firstOrNull().orEmpty()
+        return try {
+            LocalDate.parse(datePart)
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+
+    fun saveEvent(): Boolean {
+        if (title.isBlank() || date.isBlank()) {
+            showMessage("Title and Date are required.")
+            return false
+        }
+
+        if (editingEventId == null) {
+            val selectedDate = parseDateInput(date)
+            if (selectedDate == null) {
+                showMessage("Enter Date as YYYY-MM-DD (optionally followed by time).")
+                return false
+            }
+            if (selectedDate.isBefore(LocalDate.now())) {
+                showMessage("New events cannot use a past date.")
+                return false
+            }
+        }
+
+        if (category.isBlank() || location.isBlank()) {
+            showMessage("Category and Location are required.")
+            return false
+        }
 
         val event = PlannerEvent(
             id = editingEventId ?: nextId,
@@ -125,6 +168,7 @@ fun EventPlannerApp() {
 
         eventStorage.saveEvents(events)
         clearForm()
+        return true
     }
 
     LaunchedEffect(Unit) {
@@ -139,6 +183,7 @@ fun EventPlannerApp() {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar {
                 PlannerDestination.entries.forEach { destination ->
@@ -180,6 +225,7 @@ fun EventPlannerApp() {
                         if (editingEventId == event.id) {
                             clearForm()
                         }
+                        showMessage("Event deleted successfully.")
                     },
                 )
             }
@@ -197,9 +243,11 @@ fun EventPlannerApp() {
                     onLocationChange = { location = it },
                     onNotesChange = { notes = it },
                     onSave = {
-                        saveEvent()
-                        navController.navigate(PlannerDestination.EventList.route) {
-                            launchSingleTop = true
+                        val saved = saveEvent()
+                        if (saved) {
+                            navController.navigate(PlannerDestination.EventList.route) {
+                                launchSingleTop = true
+                            }
                         }
                     },
                     onCancelEdit = {
